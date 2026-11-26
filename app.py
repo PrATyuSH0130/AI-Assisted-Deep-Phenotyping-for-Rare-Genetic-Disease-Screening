@@ -53,22 +53,67 @@ def load_classes():
     )
 
     with open(path, "r") as f:
-        classes = json.load(f)
+        mapping = json.load(f)
 
-    if isinstance(classes, dict):
-        if "class_to_idx" in classes:
-            mapping = classes["class_to_idx"]
+    if isinstance(mapping, list):
+
+        classes = [str(x) for x in mapping]
+
+    elif isinstance(mapping, dict):
+
+        if "class_to_idx" in mapping:
+
+            class_mapping = mapping["class_to_idx"]
+
             classes = [
-                name for name, idx in
-                sorted(mapping.items(), key=lambda x: x[1])
+                str(name)
+                for name, idx in sorted(
+                    class_mapping.items(),
+                    key=lambda x: int(x[1])
+                )
             ]
-        elif "classes" in classes:
-            classes = classes["classes"]
+
+        elif "classes" in mapping:
+
+            classes = [
+                str(x) for x in mapping["classes"]
+            ]
+
+        elif all(
+            isinstance(v, int) and not isinstance(v, bool)
+            for v in mapping.values()
+        ):
+
+            # Direct disease ID -> class index mapping
+            sorted_mapping = sorted(
+                mapping.items(),
+                key=lambda x: x[1]
+            )
+
+            classes = [
+                str(disease_id)
+                for disease_id, index in sorted_mapping
+            ]
+
         else:
-            raise ValueError("Invalid class mapping format")
+            raise ValueError(
+                "Unsupported class mapping JSON structure"
+            )
+
+    else:
+        raise ValueError(
+            "Invalid class mapping format"
+        )
 
     if len(classes) != NUM_CLASSES:
-        raise ValueError("Expected exactly 34 classes")
+        raise ValueError(
+            f"Expected 34 classes, found {len(classes)}"
+        )
+
+    if len(set(classes)) != NUM_CLASSES:
+        raise ValueError(
+            "Duplicate class names or IDs found"
+        )
 
     return classes
 
@@ -78,16 +123,23 @@ def load_classes():
 def get_state_dict(checkpoint):
 
     if not isinstance(checkpoint, dict):
-        raise ValueError("Invalid checkpoint")
+        raise ValueError("Invalid checkpoint format")
 
     for key in ["state_dict", "model_state_dict", "model"]:
-        if key in checkpoint and isinstance(checkpoint[key], dict):
+
+        if key in checkpoint and isinstance(
+            checkpoint[key], dict
+        ):
+
             checkpoint = checkpoint[key]
             break
 
     keys = list(checkpoint.keys())
 
-    if keys and all(k.startswith("module.") for k in keys):
+    if keys and all(
+        k.startswith("module.") for k in keys
+    ):
+
         checkpoint = {
             k.replace("module.", "", 1): v
             for k, v in checkpoint.items()
@@ -109,8 +161,10 @@ def load_weights(model, filename):
         weights_only=True
     )
 
+    state_dict = get_state_dict(checkpoint)
+
     model.load_state_dict(
-        get_state_dict(checkpoint),
+        state_dict,
         strict=True
     )
 
@@ -132,7 +186,10 @@ def load_cnn():
         NUM_CLASSES
     )
 
-    return load_weights(model, CNN_FILE)
+    return load_weights(
+        model,
+        CNN_FILE
+    )
 
 
 # ---------------- ViT MODEL ----------------
@@ -147,7 +204,10 @@ def load_vit():
         NUM_CLASSES
     )
 
-    return load_weights(model, VIT_FILE)
+    return load_weights(
+        model,
+        VIT_FILE
+    )
 
 
 # ---------------- PREDICTION ----------------
@@ -155,19 +215,32 @@ def load_vit():
 def predict(model, image, classes):
 
     image_tensor = transform(image)
-    image_tensor = image_tensor.unsqueeze(0).to(DEVICE)
+
+    image_tensor = (
+        image_tensor.unsqueeze(0).to(DEVICE)
+    )
 
     with torch.inference_mode():
 
         output = model(image_tensor)
 
-        if output.shape[1] != NUM_CLASSES:
-            raise ValueError("Model output is not 34 classes")
+        if output.ndim != 2:
+            raise ValueError(
+                "Unexpected model output dimensions"
+            )
 
-        probabilities = torch.softmax(output, dim=1)[0]
+        if output.shape[1] != NUM_CLASSES:
+            raise ValueError(
+                f"Expected 34 outputs, got {output.shape[1]}"
+            )
+
+        probabilities = torch.softmax(
+            output, dim=1
+        )[0]
 
         values, indices = torch.topk(
-            probabilities, 5
+            probabilities,
+            k=5
         )
 
     results = []
@@ -178,8 +251,10 @@ def predict(model, image, classes):
     ):
 
         results.append({
-            "Disease Class": classes[index],
-            "Confidence (%)": round(value * 100, 2)
+            "Disease ID": classes[index],
+            "Confidence (%)": round(
+                value * 100, 2
+            )
         })
 
     return results
@@ -187,7 +262,9 @@ def predict(model, image, classes):
 
 # ---------------- USER INTERFACE ----------------
 
-st.title("🧬 AI-Assisted Deep Phenotyping")
+st.title(
+    "🧬 AI-Assisted Deep Phenotyping"
+)
 
 st.subheader(
     "Rare Genetic Disease Screening in India"
@@ -199,7 +276,8 @@ st.write(
 )
 
 st.info(
-    "Upload an image to obtain predictions from both trained models."
+    "Upload an image to obtain predictions "
+    "from both trained models."
 )
 
 st.caption(f"Device: {DEVICE}")
@@ -209,34 +287,54 @@ uploaded_file = st.file_uploader(
     type=["jpg", "jpeg", "png"]
 )
 
+
 if uploaded_file:
-
-    image = Image.open(uploaded_file).convert("RGB")
-
-    st.image(
-        image,
-        caption="Uploaded image",
-        width=350
-    )
 
     try:
 
-        with st.spinner("Loading trained models..."):
+        image = Image.open(
+            uploaded_file
+        ).convert("RGB")
+
+        st.image(
+            image,
+            caption="Uploaded image",
+            width=350
+        )
+
+        with st.spinner(
+            "Loading class mapping and trained models..."
+        ):
 
             classes = load_classes()
+
             cnn = load_cnn()
+
             vit = load_vit()
 
-        with st.spinner("Generating predictions..."):
+        st.success(
+            "Both models loaded successfully."
+        )
 
-            cnn_results = predict(cnn, image, classes)
-            vit_results = predict(vit, image, classes)
+        with st.spinner(
+            "Generating predictions..."
+        ):
+
+            cnn_results = predict(
+                cnn, image, classes
+            )
+
+            vit_results = predict(
+                vit, image, classes
+            )
 
         col1, col2 = st.columns(2)
 
         with col1:
 
-            st.subheader("CNN — ResNet18")
+            st.subheader(
+                "CNN — ResNet18"
+            )
 
             st.dataframe(
                 cnn_results,
@@ -246,7 +344,9 @@ if uploaded_file:
 
         with col2:
 
-            st.subheader("ViT — B/16")
+            st.subheader(
+                "ViT — B/16"
+            )
 
             st.dataframe(
                 vit_results,
@@ -254,15 +354,20 @@ if uploaded_file:
                 hide_index=True
             )
 
-        st.success("Inference completed successfully.")
+        st.success(
+            "Inference completed successfully."
+        )
 
     except Exception as e:
 
-        st.error("Model loading or prediction failed.")
+        st.error(
+            "Model loading or prediction failed."
+        )
+
         st.exception(e)
 
         st.warning(
-            "Check the checkpoint architecture, "
+            "Please check checkpoint architecture, "
             "class mapping and preprocessing."
         )
 
@@ -271,7 +376,7 @@ st.divider()
 
 st.warning(
     "Research prototype only. Results are experimental "
-    "and are not a medical diagnosis."
+    "and must not be used as a medical diagnosis."
 )
 
 st.caption(
