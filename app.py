@@ -21,7 +21,7 @@ HF_REPO = "Pratyush13/rare-disease-screening-models"
 
 CNN_FILE = "FINAL_CNN_34CLASS_RESNET18.pth"
 VIT_FILE = "FINAL_VIT_B16_34CLASS_ALL140.pth"
-MAPPING_FILE = "class_names.json"
+MAPPING_FILE = "FINAL_CNN_34CLASS_CLASS_MAPPING.json"
 
 NUM_CLASSES = 34
 
