@@ -9,13 +9,9 @@ from torchvision import models, transforms
 from huggingface_hub import hf_hub_download
 
 
-# ---------------- CONFIG ----------------
-
-st.set_page_config(
-    page_title="Rare Disease Screening",
-    page_icon="🧬",
-    layout="wide"
-)
+# ==========================================
+# CONFIGURATION
+# ==========================================
 
 HF_REPO = "Pratyush13/rare-disease-screening-models"
 
@@ -25,139 +21,126 @@ MAPPING_FILE = "FINAL_CNN_34CLASS_CLASS_MAPPING.json"
 
 NUM_CLASSES = 34
 
-DEVICE = torch.device(
-    "cuda" if torch.cuda.is_available() else "cpu"
+DEVICE = torch.device("cpu")
+
+
+# ==========================================
+# STREAMLIT PAGE
+# ==========================================
+
+st.set_page_config(
+    page_title="AI-Assisted Rare Disease Screening",
+    page_icon="🧬",
+    layout="wide"
+)
+
+st.title("🧬 AI-Assisted Deep Phenotyping")
+st.subheader("Rare Genetic Disease Screening in India")
+
+st.warning(
+    "Research prototype only. Predictions are not a medical diagnosis "
+    "and must not replace professional clinical assessment."
 )
 
 
-# ---------------- IMAGE PREPROCESSING ----------------
-
-transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize(
-        [0.485, 0.456, 0.406],
-        [0.229, 0.224, 0.225]
-    )
-])
-
-
-# ---------------- CLASS MAPPING ----------------
+# ==========================================
+# DOWNLOAD FILES FROM HUGGING FACE
+# ==========================================
 
 @st.cache_data
-def load_classes():
+def download_file(filename):
 
-    path = hf_hub_download(
-        repo_id=HF_REPO,
-        filename=MAPPING_FILE
-    )
-
-    with open(path, "r") as f:
-        mapping = json.load(f)
-
-    if isinstance(mapping, list):
-
-        classes = [str(x) for x in mapping]
-
-    elif isinstance(mapping, dict):
-
-        if "class_to_idx" in mapping:
-
-            class_mapping = mapping["class_to_idx"]
-
-            classes = [
-                str(name)
-                for name, idx in sorted(
-                    class_mapping.items(),
-                    key=lambda x: int(x[1])
-                )
-            ]
-
-        elif "classes" in mapping:
-
-            classes = [
-                str(x) for x in mapping["classes"]
-            ]
-
-        elif all(
-            isinstance(v, int) and not isinstance(v, bool)
-            for v in mapping.values()
-        ):
-
-            # Direct disease ID -> class index mapping
-            sorted_mapping = sorted(
-                mapping.items(),
-                key=lambda x: x[1]
-            )
-
-            classes = [
-                str(disease_id)
-                for disease_id, index in sorted_mapping
-            ]
-
-        else:
-            raise ValueError(
-                "Unsupported class mapping JSON structure"
-            )
-
-    else:
-        raise ValueError(
-            "Invalid class mapping format"
-        )
-
-    if len(classes) != NUM_CLASSES:
-        raise ValueError(
-            f"Expected 34 classes, found {len(classes)}"
-        )
-
-    if len(set(classes)) != NUM_CLASSES:
-        raise ValueError(
-            "Duplicate class names or IDs found"
-        )
-
-    return classes
-
-
-# ---------------- CHECKPOINT LOADER ----------------
-
-def get_state_dict(checkpoint):
-
-    if not isinstance(checkpoint, dict):
-        raise ValueError("Invalid checkpoint format")
-
-    for key in ["state_dict", "model_state_dict", "model"]:
-
-        if key in checkpoint and isinstance(
-            checkpoint[key], dict
-        ):
-
-            checkpoint = checkpoint[key]
-            break
-
-    keys = list(checkpoint.keys())
-
-    if keys and all(
-        k.startswith("module.") for k in keys
-    ):
-
-        checkpoint = {
-            k.replace("module.", "", 1): v
-            for k, v in checkpoint.items()
-        }
-
-    return checkpoint
-
-
-def load_weights(model, filename):
-
-    path = hf_hub_download(
+    return hf_hub_download(
         repo_id=HF_REPO,
         filename=filename
     )
 
+
+# ==========================================
+# LOAD CLASS MAPPING
+# ==========================================
+
+@st.cache_data
+def load_classes():
+
+    mapping_path = download_file(MAPPING_FILE)
+
+    with open(mapping_path, "r") as f:
+        mapping = json.load(f)
+
+    if isinstance(mapping, list):
+        classes = mapping
+
+    elif isinstance(mapping, dict):
+
+        if "class_to_idx" in mapping:
+            class_to_idx = mapping["class_to_idx"]
+
+            classes = sorted(
+                class_to_idx,
+                key=lambda x: class_to_idx[x]
+            )
+
+        elif "classes" in mapping:
+            classes = mapping["classes"]
+
+        elif all(isinstance(v, int) for v in mapping.values()):
+            classes = sorted(
+                mapping,
+                key=lambda x: mapping[x]
+            )
+
+        else:
+            raise ValueError("Invalid class mapping format")
+
+    else:
+        raise ValueError("Unsupported class mapping format")
+
+    if len(classes) != NUM_CLASSES:
+        raise ValueError(
+            f"Expected {NUM_CLASSES} classes, "
+            f"but found {len(classes)}"
+        )
+
+    return [str(c) for c in classes]
+
+
+# ==========================================
+# LOAD MODEL WEIGHTS
+# ==========================================
+
+def get_state_dict(checkpoint):
+
+    if isinstance(checkpoint, dict):
+
+        for key in ["state_dict", "model_state_dict", "model"]:
+
+            if key in checkpoint and isinstance(checkpoint[key], dict):
+                checkpoint = checkpoint[key]
+                break
+
+    if not isinstance(checkpoint, dict):
+        raise ValueError("Invalid checkpoint format")
+
+    cleaned = {}
+
+    for key, value in checkpoint.items():
+
+        if key.startswith("module."):
+            key = key.replace("module.", "", 1)
+
+        cleaned[key] = value
+
+    return cleaned
+
+
+def load_weights(model, filename):
+
+    path = download_file(filename)
+
     checkpoint = torch.load(
         path,
-        map_location="cpu",
+        map_location=DEVICE,
         weights_only=True
     )
 
@@ -174,7 +157,9 @@ def load_weights(model, filename):
     return model
 
 
-# ---------------- CNN MODEL ----------------
+# ==========================================
+# LOAD CNN MODEL
+# ==========================================
 
 @st.cache_resource
 def load_cnn():
@@ -192,16 +177,25 @@ def load_cnn():
     )
 
 
-# ---------------- ViT MODEL ----------------
+# ==========================================
+# LOAD VIT MODEL
+# ==========================================
 
 @st.cache_resource
 def load_vit():
 
     model = models.vit_b_16(weights=None)
 
-    model.heads.head = nn.Linear(
-        model.heads.head.in_features,
-        NUM_CLASSES
+    # Checkpoint contains:
+    # heads.head.1.weight
+    # heads.head.1.bias
+
+    model.heads.head = nn.Sequential(
+        nn.Dropout(p=0.0),
+        nn.Linear(
+            model.heads.head.in_features,
+            NUM_CLASSES
+        )
     )
 
     return load_weights(
@@ -210,175 +204,198 @@ def load_vit():
     )
 
 
-# ---------------- PREDICTION ----------------
+# ==========================================
+# IMAGE PREPROCESSING
+# ==========================================
 
-def predict(model, image, classes):
+transform = transforms.Compose([
 
-    image_tensor = transform(image)
+    transforms.Resize((224, 224)),
 
-    image_tensor = (
-        image_tensor.unsqueeze(0).to(DEVICE)
+    transforms.ToTensor(),
+
+    transforms.Normalize(
+        mean=[0.485, 0.456, 0.406],
+        std=[0.229, 0.224, 0.225]
     )
 
-    with torch.inference_mode():
+])
 
-        output = model(image_tensor)
 
-        if output.ndim != 2:
-            raise ValueError(
-                "Unexpected model output dimensions"
-            )
+# ==========================================
+# PREDICTION FUNCTION
+# ==========================================
 
-        if output.shape[1] != NUM_CLASSES:
-            raise ValueError(
-                f"Expected 34 outputs, got {output.shape[1]}"
-            )
+def predict(model, image):
+
+    image_tensor = transform(image).unsqueeze(0)
+    image_tensor = image_tensor.to(DEVICE)
+
+    with torch.no_grad():
+
+        outputs = model(image_tensor)
 
         probabilities = torch.softmax(
-            output, dim=1
+            outputs,
+            dim=1
         )[0]
 
-        values, indices = torch.topk(
+        top_probs, top_indices = torch.topk(
             probabilities,
             k=5
         )
 
-    results = []
-
-    for value, index in zip(
-        values.cpu().tolist(),
-        indices.cpu().tolist()
-    ):
-
-        results.append({
-            "Disease ID": classes[index],
-            "Confidence (%)": round(
-                value * 100, 2
-            )
-        })
-
-    return results
+    return top_probs.cpu().tolist(), top_indices.cpu().tolist()
 
 
-# ---------------- USER INTERFACE ----------------
+# ==========================================
+# LOAD MODELS
+# ==========================================
 
-st.title(
-    "🧬 AI-Assisted Deep Phenotyping"
-)
+@st.cache_resource
+def load_all_models():
 
-st.subheader(
-    "Rare Genetic Disease Screening in India"
-)
+    cnn = load_cnn()
+    vit = load_vit()
 
-st.write(
-    "CNN and Vision Transformer based facial "
-    "phenotype classification research prototype."
-)
+    return cnn, vit
 
-st.info(
-    "Upload an image to obtain predictions "
-    "from both trained models."
-)
 
-st.caption(f"Device: {DEVICE}")
+# ==========================================
+# MAIN APPLICATION
+# ==========================================
+
+try:
+
+    with st.spinner("Loading AI models..."):
+
+        classes = load_classes()
+
+        cnn, vit = load_all_models()
+
+    st.success("Both CNN and ViT models loaded successfully.")
+
+    st.write("**Number of disease classes:**", len(classes))
+
+except Exception as e:
+
+    st.error("Model loading failed.")
+
+    st.exception(e)
+
+    st.stop()
+
+
+# ==========================================
+# IMAGE UPLOAD
+# ==========================================
+
+st.divider()
+
+st.header("Upload Patient Image")
 
 uploaded_file = st.file_uploader(
-    "Upload facial image",
+    "Upload a facial photograph",
     type=["jpg", "jpeg", "png"]
 )
 
 
-if uploaded_file:
+# ==========================================
+# RUN PREDICTION
+# ==========================================
 
-    try:
+if uploaded_file is not None:
 
-        image = Image.open(
-            uploaded_file
-        ).convert("RGB")
+    image = Image.open(uploaded_file).convert("RGB")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
 
         st.image(
             image,
-            caption="Uploaded image",
-            width=350
+            caption="Uploaded Patient Image",
+            use_container_width=True
         )
 
-        with st.spinner(
-            "Loading class mapping and trained models..."
-        ):
+    with col2:
 
-            classes = load_classes()
+        st.subheader("Prediction")
 
-            cnn = load_cnn()
+        if st.button("Analyze Image", type="primary"):
 
-            vit = load_vit()
+            try:
 
-        st.success(
-            "Both models loaded successfully."
-        )
+                with st.spinner("Analyzing image..."):
 
-        with st.spinner(
-            "Generating predictions..."
-        ):
+                    cnn_probs, cnn_indices = predict(cnn, image)
 
-            cnn_results = predict(
-                cnn, image, classes
-            )
+                    vit_probs, vit_indices = predict(vit, image)
 
-            vit_results = predict(
-                vit, image, classes
-            )
+                st.success("Analysis completed.")
 
-        col1, col2 = st.columns(2)
+                st.divider()
 
-        with col1:
+                # CNN RESULTS
 
-            st.subheader(
-                "CNN — ResNet18"
-            )
+                st.subheader("CNN — ResNet18")
 
-            st.dataframe(
-                cnn_results,
-                use_container_width=True,
-                hide_index=True
-            )
+                for rank, (prob, idx) in enumerate(
+                    zip(cnn_probs, cnn_indices),
+                    start=1
+                ):
 
-        with col2:
+                    disease = classes[idx]
 
-            st.subheader(
-                "ViT — B/16"
-            )
+                    st.write(
+                        f"{rank}. Disease ID: {disease} "
+                        f"— Score: {prob * 100:.2f}%"
+                    )
 
-            st.dataframe(
-                vit_results,
-                use_container_width=True,
-                hide_index=True
-            )
+                    st.progress(float(prob))
 
-        st.success(
-            "Inference completed successfully."
-        )
+                st.divider()
 
-    except Exception as e:
+                # VIT RESULTS
 
-        st.error(
-            "Model loading or prediction failed."
-        )
+                st.subheader("Vision Transformer — ViT-B/16")
 
-        st.exception(e)
+                for rank, (prob, idx) in enumerate(
+                    zip(vit_probs, vit_indices),
+                    start=1
+                ):
 
-        st.warning(
-            "Please check checkpoint architecture, "
-            "class mapping and preprocessing."
-        )
+                    disease = classes[idx]
 
+                    st.write(
+                        f"{rank}. Disease ID: {disease} "
+                        f"— Score: {prob * 100:.2f}%"
+                    )
+
+                    st.progress(float(prob))
+
+                st.info(
+                    "These scores represent model outputs, "
+                    "not confirmed disease probabilities or diagnoses."
+                )
+
+            except Exception as e:
+
+                st.error("Prediction failed.")
+
+                st.exception(e)
+
+
+# ==========================================
+# FOOTER
+# ==========================================
 
 st.divider()
 
-st.warning(
-    "Research prototype only. Results are experimental "
-    "and must not be used as a medical diagnosis."
+st.caption(
+    "AI-Assisted Deep Phenotyping for Rare Genetic Disease Screening in India"
 )
 
 st.caption(
-    "BIT Mesra | CNN + Vision Transformer | Research Project"
+    "Academic research prototype | CNN + Vision Transformer"
 )
